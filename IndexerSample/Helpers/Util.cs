@@ -1,383 +1,169 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Threading.Tasks;
 using IndexerSample.Models;
-using Microsoft.Extensions.FileProviders;
+using IndexerSample.Components;
 using Microsoft.Extensions.Logging;
+using MongoDB.Driver;
+using MongoDB.Bson;
+using MongoDB.Bson.Serialization;
 
 namespace IndexerSample.Services.Helpers
 {
 
     public interface IUtil {
-        Task<byte[]> GetFileContentAsync(string fileNanme);
-        char[] TermDelimeters { get; set; }
-        List<string> StopWords { get; set; }
-        int TermMinimumLength { get; set; }
-        string AlphaOnlyString(string dirty);
-        TokenList<Token> Tokenizer(string[] termsRaw, Guid? docGuid);
+        Task<string> GetDocumentID(string path);
+        Task<List<ITokenDocument>> GetTokenDocuments();
+        Task<List<ITokenDocument>> GetTokenDocumentsByTerms(List<string> terms);
+        Task<string> AddDocument(String path);
+        Task AddTokenDocument(string term, string docId, HashSet<long> positions);
+        Task<bool?> RemoveDocument(string id);
+        Task ClearDeletedDocuments(string id);
+        Task<HashSet<IDocument>> GetDocuments();
+        Task<HashSet<IDocument>> GetDocumentsByID(List<string> docIds);
+        Task<IDocument> GetDocument(string id);
     }
 
     public class Util : IUtil
     {
+        public static Util util;
+        private IMongoClient _client;
+        private IMongoDatabase _database;
+        private IMongoCollection<TokenDocument> _invertedIndicesTable;
+        private IMongoCollection<Document> _documentsTable;
         private readonly ILogger<Util> _logger;
-        private readonly IFileProvider _fileProvider;
+        private readonly Indexer _indexer;
 
-        public Util(ILogger<Util> logger, IFileProvider fileProvider)
+        static Util(){
+            if (!BsonClassMap.IsClassMapRegistered(typeof(TokenDocument))) {
+                // register class map for TokenDocument and Document
+                BsonClassMap.RegisterClassMap<TokenDocument>();
+                BsonClassMap.RegisterClassMap<Document>();
+            }
+        }
+
+        public Util(ILogger<Util> logger, IMongoClient client, IMongoDatabase database)
         {
+            if (client == null || database == null)
+            {
+                throw new ArgumentNullException("MongoDB Client and Database are required");
+            }
+            _client = client;
+            _database = database;
             _logger = logger;
-            _fileProvider = fileProvider;
+            _indexer = new Indexer(util);
+            //_indexer.IndexRespository();
+            initDB();
+            _invertedIndicesTable = database.GetCollection<TokenDocument>("InvertedIndicesTable");
+            _documentsTable = database.GetCollection<Document>("DocumentsTable");
         }
 
-        public async Task<byte[]> GetFileContentAsync(string fileName)
+        public static void init()
         {
-            var fileInfo = _fileProvider.GetFileInfo($"LocalRepository/Uploads/{fileName}");
-            return await File.ReadAllBytesAsync(fileInfo.PhysicalPath);
+            IMongoClient _client;
+            IMongoDatabase _database;
+            _client = new MongoClient();
+            _database = _client.GetDatabase("indexersample");
+            ILoggerFactory factory = new LoggerFactory();
+            ILogger<Util> log = new Logger<Util>(factory);
+            util = new Util(log, _client, _database);
         }
 
-        private static char[] _TokenDelimeters = new char[]
-        {
-                '!',
-                '\"',
-                '#',
-                '$',
-                '%',
-                '&',
-                '\'',
-                '(',
-                ')',
-                '*',
-                '+',
-                ',',
-                '-',
-                '.',
-                '/',
-                ':',
-                ';',
-                '<',
-                '=',
-                '>',
-                '?',
-                '@',
-                '[',
-                '\\',
-                ']',
-                '^',
-                '_',
-                '`',
-                '{',
-                '|',
-                '}',
-                '~',
-                ' ',
-                '\'',
-                '\"',
-                '\u001a',
-                '\r',
-                '\n',
-                '\t'
-           };
-
-        private static List<string> _StopWords = new ()
-        {
-            "a",
-            "about",
-            "above",
-            "after",
-            "again",
-            "against",
-            "aint",
-            "ain't",
-            "all",
-            "also",
-            "am",
-            "an",
-            "and",
-            "any",
-            "are",
-            "arent",
-            "aren't",
-            "as",
-            "at",
-            "be",
-            "because",
-            "been",
-            "before",
-            "being",
-            "below",
-            "between",
-            "both",
-            "but",
-            "by",
-            "cant",
-            "can't",
-            "cannot",
-            "could",
-            "couldnt",
-            "couldn't",
-            "did",
-            "didnt",
-            "didn't",
-            "do",
-            "does",
-            "doesnt",
-            "doesn't",
-            "doing",
-            "dont",
-            "don't",
-            "down",
-            "during",
-            "each",
-            "few",
-            "for",
-            "from",
-            "further",
-            "had",
-            "hadnt",
-            "hadn't",
-            "has",
-            "hasnt",
-            "hasn't",
-            "have",
-            "havent",
-            "haven't",
-            "having",
-            "he",
-            "hed",
-            "he'd",
-            "he'll",
-            "hes",
-            "he's",
-            "her",
-            "here",
-            "heres",
-            "here's",
-            "hers",
-            "herself",
-            "him",
-            "himself",
-            "his",
-            "how",
-            "hows",
-            "how's",
-            "i",
-            "id",
-            "i'd",
-            "i'll",
-            "im",
-            "i'm",
-            "ive",
-            "i've",
-            "if",
-            "in",
-            "into",
-            "is",
-            "isnt",
-            "isn't",
-            "it",
-            "its",
-            "it's",
-            "its",
-            "itself",
-            "lets",
-            "let's",
-            "me",
-            "more",
-            "most",
-            "mustnt",
-            "mustn't",
-            "my",
-            "myself",
-            "no",
-            "nor",
-            "not",
-            "of",
-            "off",
-            "on",
-            "once",
-            "only",
-            "or",
-            "other",
-            "ought",
-            "our",
-            "ours",
-            "ourselves",
-            "out",
-            "over",
-            "own",
-            "same",
-            "shall",
-            "shant",
-            "shan't",
-            "she",
-            "she'd",
-            "she'll",
-            "shes",
-            "she's",
-            "should",
-            "shouldnt",
-            "shouldn't",
-            "so",
-            "some",
-            "such",
-            "than",
-            "that",
-            "thats",
-            "that's",
-            "the",
-            "their",
-            "theirs",
-            "them",
-            "themselves",
-            "then",
-            "there",
-            "theres",
-            "there's",
-            "these",
-            "they",
-            "theyd",
-            "they'd",
-            "theyll",
-            "they'll",
-            "theyre",
-            "they're",
-            "theyve",
-            "they've",
-            "this",
-            "those",
-            "thou",
-            "though",
-            "through",
-            "to",
-            "too",
-            "under",
-            "until",
-            "unto",
-            "up",
-            "very",
-            "was",
-            "wasnt",
-            "wasn't",
-            "we",
-            "we'd",
-            "we'll",
-            "were",
-            "we're",
-            "weve",
-            "we've",
-            "werent",
-            "weren't",
-            "what",
-            "whats",
-            "what's",
-            "when",
-            "whens",
-            "when's",
-            "where",
-            "wheres",
-            "where's",
-            "which",
-            "while",
-            "who",
-            "whos",
-            "who's",
-            "whose",
-            "whom",
-            "why",
-            "whys",
-            "why's",
-            "with",
-            "wont",
-            "won't",
-            "would",
-            "wouldnt",
-            "wouldn't",
-            "you",
-            "youd",
-            "you'd",
-            "youll",
-            "you'll",
-            "youre",
-            "you're",
-            "youve",
-            "you've",
-            "your",
-            "yours",
-            "yourself",
-            "yourselves"
-        };
-
-        private static int _TermMinimumLength = 3;
-
-        public char[] TermDelimeters {
-            get => _TokenDelimeters;
-            set {
-                if (value == null) throw new ArgumentNullException(nameof(TermDelimeters));
-                _TokenDelimeters = value;
+        public async void initDB() {
+            if(!await CheckIfCollectionExists("InvertedIndicesTable")){
+                _database.CreateCollection("InvertedIndicesTable");
+            }
+            if(!await CheckIfCollectionExists("DocumentsTable")){
+                _database.CreateCollection("DocumentsTable");
             }
         }
-        public List<string> StopWords {
-            get => _StopWords;
-            set => _StopWords = value;
-        }
-        public int TermMinimumLength {
-            get => _TermMinimumLength;
-            set => _TermMinimumLength = value; }
 
-
-        public string AlphaOnlyString(string dirty)
+        private async Task<bool> CheckIfCollectionExists(string collectionName)
         {
-            if (String.IsNullOrEmpty(dirty)) return null;
-            string clean = null;
-            for (int i = 0; i < dirty.Length; i++)
+            var filter = new BsonDocument("name", collectionName);
+            var collectionCursor = await _database.ListCollectionsAsync(new ListCollectionsOptions {Filter = filter});
+            return await collectionCursor.AnyAsync();
+        }
+        public async Task<IDocument> GetDocument(string id)
+        {
+            var filter = Builders<Document>.Filter.Eq("_id", id);
+            Document result = await _documentsTable.Find(filter).FirstOrDefaultAsync();
+            return result;
+        }
+        public async Task<HashSet<IDocument>> GetDocuments()
+        {
+            HashSet<IDocument> result = new HashSet<IDocument>();
+            await (await _documentsTable.FindAsync(FilterDefinition<Document>.Empty)).ForEachAsync(t => result.Add(t));
+            if (result.Count < 1)
             {
-                int val = (int)(dirty[i]);
-
-                if (
-                    ((val > 64) && (val < 91))          // A...Z
-                    || ((val > 96) && (val < 123))      // a...z
-                    )
-                {
-                    clean += dirty[i];
-                }
+                return new HashSet<IDocument>();
             }
-
-            return clean;
+            return result;
+        }
+        public async Task<HashSet<IDocument>> GetDocumentsByID(List<string> docIds)
+        {
+            var filter = Builders<Document>.Filter.AnyIn("_id", docIds);
+            HashSet<IDocument> result = new HashSet<IDocument>();
+            await (await _documentsTable.FindAsync(filter)).ForEachAsync(t => result.Add(t));
+            if (result.Count < 1)
+            {
+                return new HashSet<IDocument>();
+            }
+            return result;
+        }
+        public async Task<List<ITokenDocument>> GetTokenDocuments()
+        {
+            List<ITokenDocument> result = new List<ITokenDocument>();
+            await (await _invertedIndicesTable.FindAsync(FilterDefinition<TokenDocument>.Empty)).ForEachAsync(t => result.Add(t));
+            return result;
+        }
+        public async Task<List<ITokenDocument>> GetTokenDocumentsByTerms(List<string> terms)
+        {
+            var filter = Builders<TokenDocument>.Filter.AnyIn("term", terms);
+            List<ITokenDocument> result = new List<ITokenDocument>();
+            await (await _invertedIndicesTable.FindAsync(filter)).ForEachAsync(t => result.Add(t));
+            return result;
+        }
+        public async Task<string> GetDocumentID(string path)
+        {
+            var filter = Builders<Document>.Filter.Eq("path", path);
+            Document result = await _documentsTable.Find(filter).FirstOrDefaultAsync();
+            if (result == null) return null;
+            return result["_id"].ToString();
         }
 
-        public TokenList<Token> Tokenizer(string[] termsRaw, Guid? docGuid)
+        public async Task<string> AddDocument(string path)
         {
-            List<string> termsAlphaOnly = new List<string>();
-            TokenList<Token> tokenList = new();
-            HashSet<string> terms = new();
+            await _documentsTable.InsertOneAsync(new Document(path));
+            string id = await GetDocumentID(path);
+            return id;
+        }
 
+        public async Task AddTokenDocument(string term, string docId, HashSet<long> positions)
+        {
+            TokenDocument newDoc = new TokenDocument(term);
+            newDoc.addDocument(docId, positions);
+            await _invertedIndicesTable.InsertOneAsync(newDoc);
+        }
+        public async Task<bool?> RemoveDocument(string id)
+        {
+            //Remove document from document table
+            var filter = Builders<Document>.Filter.Eq("_id", new ObjectId(id));
+            var result = await _documentsTable.DeleteOneAsync(filter);
+            if (!result.IsAcknowledged) return false;
 
-            foreach (string curr in termsRaw)
-            {
-                if (String.IsNullOrEmpty(curr)) continue;
-                if (curr.Length < TermMinimumLength) continue;
-                if (StopWords.Contains(curr.ToLower())) continue;
+            //Clear terms with empty documents from database
+            var clearFilter = Builders<BsonDocument>.Filter.SizeLte("docs", 0);
+            await _invertedIndicesTable.DeleteManyAsync(t => t.Docs.Count < 1);
 
-                string currAlphaOnly = AlphaOnlyString(curr);
-                if (String.IsNullOrEmpty(currAlphaOnly)) continue;
-                termsAlphaOnly.Add(currAlphaOnly.ToLower());
-            }
+            await ClearDeletedDocuments(id);
+            return true;
+        }
 
-            for (var i = 0; i < termsAlphaOnly.Count; i++)
-            {
-                var term = termsAlphaOnly[i];
-                if (!terms.Contains(term))
-                {
-                    terms.Add(term);
-                    tokenList.Add(new Token(term, i, docGuid));
-                }
-                else
-                {
-                    tokenList[term].Positions.Add(i);
-                }
-            }
-
-            return tokenList;
+        public async Task ClearDeletedDocuments(string id) {
+            //Delete the document from all occurences in the token documents table 
+            var bulkDeleteUpdateFilter = Builders<TokenDocument>.Update.PullFilter("docs", Builders<BsonDocument>.Filter.Eq("doc_id", new ObjectId(id)));
+            await _invertedIndicesTable.UpdateManyAsync(Builders<TokenDocument>.Filter.Eq("docs.doc_id", new ObjectId(id)), bulkDeleteUpdateFilter);
         }
     }
 }

@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Collections;
 using System.Collections.Generic;
-using System.Text.Json;
 
 namespace IndexerSample.Models
 {
@@ -9,26 +8,26 @@ namespace IndexerSample.Models
     public interface IToken
     {
         public string Term { get; set; }
+        public HashSet<long> Positions {get; set;}
+        public string DocId { get; set; }
     }
 
     public class Token : IToken
     {
-
-        public Token(string name, long position, Guid? docGuid)
-        {
-            this.Term = name;
-            this.Positions = new List<long> { position };
-            this.DocGuid = docGuid;
-        }
-
         public string Term { get; set; }
-        public List<long> Positions { get; set; }
-        public Guid? DocGuid { get; set; }
+        public HashSet<long> Positions { get; set; }
+        public string DocId { get; set; }
+
+        public Token(string term, long position, string docId)
+        {
+            this.Term = term;
+            this.Positions = new HashSet<long> { position };
+            this.DocId = docId;
+        }
     }
 
     public class TokenList<T> : IEnumerable where T : IToken
     {
-
         private List<T> tokenList = new();
 
         public T this[string key] => FindTokenByIndex(key);
@@ -41,6 +40,16 @@ namespace IndexerSample.Models
             }
 
             throw new ArgumentOutOfRangeException("index is out of bound");
+        }
+
+        public List<TokenDocument> GetTokenDocuments(){
+            List<TokenDocument> result = new List<TokenDocument>();
+            foreach(var token in tokenList){
+                TokenDocument tDoc = new TokenDocument(token.Term);
+                tDoc.addDocument(token.DocId, token.Positions); 
+                result.Add(tDoc);  
+            }  
+            return result;
         }
 
         public void Add(T token)

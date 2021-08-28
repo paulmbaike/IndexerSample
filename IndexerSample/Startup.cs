@@ -33,8 +33,8 @@ namespace IndexerSample
         // This method gets called by the runtime. Use this method to add services to the container.
         public void ConfigureServices(IServiceCollection services)
         {
-            var physicalProvider = _env.ContentRootFileProvider;
-            services.AddSingleton<IFileProvider>(physicalProvider);
+            // var physicalProvider = _env.ContentRootFileProvider;
+            // services.AddSingleton<IFileProvider>(physicalProvider);
 
             services.AddControllers();
             services.AddSwaggerGen(c =>
@@ -42,21 +42,17 @@ namespace IndexerSample
                 c.SwaggerDoc("v1", new OpenApiInfo { Title = "IndexerSample", Version = "v1" });
             });
 
-            services.AddAutoMapper(AppDomain.CurrentDomain.GetAssemblies());
-
-            services.AddScoped<IUtil, Util>();
-            services.AddScoped<IFileParser, TXTParser>();
-
-            services.AddDbContext<DatabaseContext>(options => options.UseNpgsql(Configuration.GetConnectionString("postgresConnection")));
+            Util.init();
+            //services.AddScoped<IUtil, Util>();
         }
 
         // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.
         public void Configure(IApplicationBuilder app, IWebHostEnvironment env, IServiceProvider provider)
         {
-            using (var context = provider.GetService<DatabaseContext>())
-            {
-                context.Database.Migrate();
-            }
+            // using (var context = provider.GetService<DatabaseContext>())
+            // {
+            //     context.Database.Migrate();
+            // }
 
             if (env.IsDevelopment())
             {

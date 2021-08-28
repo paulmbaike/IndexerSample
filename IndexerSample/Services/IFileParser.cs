@@ -7,6 +7,6 @@ namespace IndexerSample.Services
 {
     public interface IFileParser
     {
-        Task<TokenList<Token>> GetTokenList(string filePath, Guid docGuid);
+        void GetTokenList(string filePath, Guid docGuid);
     }
 }
